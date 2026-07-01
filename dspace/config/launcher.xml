@@ -139,13 +139,6 @@
         </step>
     </command>
     <command>
-        <name>oai</name>
-        <description>OAI script manager</description>
-        <step>
-            <class>org.dspace.xoai.app.XOAI</class>
-        </step>
-    </command>
-    <command>
         <name>packager</name>
         <description>Execute a packager</description>
         <step>

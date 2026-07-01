@@ -208,4 +208,16 @@ public abstract class DSpaceRunnable<T extends ScriptConfiguration> implements R
     public enum StepResult {
         Continue, Exit;
     }
+    
+    /**
+    * Print the help for this script.
+    * <p>
+    * Subclasses may override this method when they need to preserve
+    * a legacy help format.
+    *
+    * @param options command line options
+    */
+    protected void printHelp(Options options) {
+        handler.printHelp(options, getScriptConfiguration().getName());
+    }
 }

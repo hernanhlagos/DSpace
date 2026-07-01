@@ -19,6 +19,9 @@ import org.dspace.scripts.DSpaceRunnable;
 import org.springframework.beans.factory.BeanNameAware;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * This class represents an Abstract class that a ScriptConfiguration can inherit to further implement this
  * and represent a script's configuration.
@@ -137,4 +140,17 @@ public abstract class ScriptConfiguration<T extends DSpaceRunnable> implements B
     public void setIsVisibleFromUI(boolean isVisibleFromUI) {
         this.isVisibleFromUI = isVisibleFromUI;
     }
+    
+    /**
+    * Return the allowed values for the given option, when the option should be
+    * presented as a selection list in REST/UI clients.
+    *
+    * By default, script parameters do not restrict values.
+    *
+    * @param option command line option
+    * @return allowed values for this option
+    */
+   public List<String> getAllowedValues(Option option) {
+       return Collections.emptyList();
+   }
 }

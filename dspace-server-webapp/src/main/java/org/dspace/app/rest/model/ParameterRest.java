@@ -7,6 +7,9 @@
  */
 package org.dspace.app.rest.model;
 
+import java.util.LinkedList;
+import java.util.List;
+
 /**
  * This class serves as a REST representation for a script parameter
  */
@@ -34,6 +37,8 @@ public class ParameterRest {
      * The long name of the parameter
      */
     private String nameLong;
+    
+    private List<String> allowedValues = new LinkedList<>();
 
     public String getName() {
         return name;
@@ -89,5 +94,13 @@ public class ParameterRest {
      */
     public void setMandatory(boolean mandatory) {
         this.mandatory = mandatory;
+    }
+    
+    public List<String> getAllowedValues() {
+        return allowedValues;
+    }
+
+    public void setAllowedValues(List<String> allowedValues) {
+        this.allowedValues = allowedValues;
     }
 }

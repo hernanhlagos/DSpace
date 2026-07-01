@@ -34,10 +34,9 @@ import com.lyncode.xoai.dataprovider.exceptions.ConfigurationException;
 import com.lyncode.xoai.dataprovider.exceptions.WritingXmlException;
 import com.lyncode.xoai.dataprovider.xml.XmlOutputContext;
 import com.lyncode.xoai.dataprovider.xml.xoai.Metadata;
-import org.apache.commons.cli.CommandLine;
-import org.apache.commons.cli.CommandLineParser;
-import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.solr.client.solrj.SolrClient;
@@ -62,6 +61,7 @@ import org.dspace.content.factory.ContentServiceFactory;
 import org.dspace.content.service.ItemService;
 import org.dspace.core.Constants;
 import org.dspace.core.Context;
+import org.dspace.scripts.DSpaceRunnable;
 import org.dspace.services.ConfigurationService;
 import org.dspace.services.factory.DSpaceServicesFactory;
 import org.dspace.util.SolrUtils;
@@ -82,13 +82,14 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
  * @author Lyncode Development Team (dspace at lyncode dot com)
  */
 @SuppressWarnings("deprecation")
-public class XOAI {
+public class XOAI extends DSpaceRunnable<OAIScriptConfiguration> {
     private static Logger log = LogManager.getLogger(XOAI.class);
 
     // needed because the solr query only returns 10 rows by default
-    private final Context context;
-    private final boolean verbose;
+    private Context context;
+    private boolean verbose;
     private boolean clean;
+    private String command;
 
     @Autowired
     private SolrServerResolver solrServerResolver;
@@ -122,6 +123,13 @@ public class XOAI {
         }
         return formats;
     }
+    
+    public XOAI() {
+        this.authorizeService = AuthorizeServiceFactory.getInstance().getAuthorizeService();
+        this.itemService = ContentServiceFactory.getInstance().getItemService();
+        this.extensionPlugins = new DSpace().getServiceManager()
+                .getServicesByType(XOAIExtensionItemCompilePlugin.class);
+    }
 
     public XOAI(Context context, boolean clean, boolean verbose) {
         this.context = context;
@@ -146,8 +154,34 @@ public class XOAI {
                 .getServicesByType(XOAIExtensionItemCompilePlugin.class);
     }
 
+    /**
+     * Prints a message to the same output channel used by the current execution mode.
+     * In CLI mode, the message is printed to stdout. In Process UI mode, the message
+     * is written to the process log.
+     *
+     * @param line message to print
+     */
     private void println(String line) {
-        System.out.println(line);
+        if (handler != null) {
+            handler.logInfo(line);
+        } else {
+            System.out.println(line);
+        }
+    }
+
+    /**
+     * Prints an error message to the same output channel used by the current execution mode.
+     * In CLI mode, the message is printed to stderr. In Process UI mode, the message
+     * is written to the process log.
+     *
+     * @param line error message to print
+     */
+    private void printError(String line) {
+        if (handler != null) {
+            handler.logError(line);
+        } else {
+            System.err.println(line);
+        }
     }
 
     public int index() throws DSpaceSolrIndexerException {
@@ -156,7 +190,7 @@ public class XOAI {
 
             if (clean) {
                 clearIndex();
-                System.out.println("Using full import.");
+                println("Using full import.");
                 result = this.indexAll();
             } else {
                 SolrQuery solrParams = new SolrQuery("*:*").addField("item.lastmodified")
@@ -164,7 +198,7 @@ public class XOAI {
 
                 SolrDocumentList results = DSpaceSolrSearch.query(solrServerResolver.getServer(), solrParams);
                 if (results.getNumFound() == 0) {
-                    System.out.println("There are no indexed documents, using full import.");
+                    println("There are no indexed documents, using full import.");
                     result = this.indexAll();
                 } else {
                     result = this.index(((java.util.Date) results.get(0).getFieldValue("item.lastmodified"))
@@ -183,7 +217,7 @@ public class XOAI {
     }
 
     private int index(Instant last) throws DSpaceSolrIndexerException, IOException {
-        System.out.println("Incremental import. Searching for documents modified after: " + last.toString());
+        println("Incremental import. Searching for documents modified after: " + last.toString());
         /*
          * Index all changed or new items or items whose visibility is viable to change
          * due to an embargo.
@@ -257,7 +291,7 @@ public class XOAI {
     }
 
     private int indexAll() throws DSpaceSolrIndexerException {
-        System.out.println("Full import");
+        println("Full import");
         try {
             // Index both in_archive items AND withdrawn items. Withdrawn items
             // will be flagged withdrawn
@@ -331,10 +365,10 @@ public class XOAI {
                 }
                 i++;
                 if (i % 1000 == 0 && batchSize != 1000) {
-                    System.out.println(i + " items imported so far...");
+                    println(i + " items imported so far...");
                 }
                 if (i % batchSize == 0) {
-                    System.out.println(i + " items imported so far...");
+                    println(i + " items imported so far...");
                     server.add(list);
                     server.commit();
                     list.clear();
@@ -347,7 +381,7 @@ public class XOAI {
                     }
                 }
             }
-            System.out.println("Total: " + i + " items");
+            println("Total: " + i + " items");
             if (i > 0) {
                 if (!list.isEmpty()) {
                     server.add(list);
@@ -542,17 +576,16 @@ public class XOAI {
         return pub;
     }
 
-    private static boolean getKnownExplanation(Throwable t) {
+    private boolean getKnownExplanation(Throwable t) {
         if (t instanceof ConnectException) {
-            System.err.println(
-                    "Solr server (" + configurationService.getProperty("oai.solr.url", "") + ") is down, turn it on.");
+            printError("Solr server (" + configurationService.getProperty("oai.solr.url", "") + ") is down, turn it on.");
             return true;
         }
 
         return false;
     }
 
-    private static boolean searchForReason(Throwable t) {
+    private boolean searchForReason(Throwable t) {
         if (getKnownExplanation(t)) {
             return true;
         }
@@ -564,18 +597,18 @@ public class XOAI {
 
     private void clearIndex() throws DSpaceSolrIndexerException {
         try {
-            System.out.println("Clearing index");
+            println("Clearing index");
             solrServerResolver.getServer().deleteByQuery("*:*");
             solrServerResolver.getServer().commit();
-            System.out.println("Index cleared");
+            println("Index cleared");
         } catch (SolrServerException | IOException ex) {
             throw new DSpaceSolrIndexerException(ex.getMessage(), ex);
         }
     }
 
-    private static void cleanCache(XOAIItemCacheService xoaiItemCacheService, XOAICacheService xoaiCacheService)
+    private void cleanCache(XOAIItemCacheService xoaiItemCacheService, XOAICacheService xoaiCacheService)
             throws IOException {
-        System.out.println("Purging cached OAI responses.");
+        println("Purging cached OAI responses.");
         xoaiItemCacheService.deleteAll();
         xoaiCacheService.deleteAll();
     }
@@ -585,97 +618,8 @@ public class XOAI {
     private static final String COMMAND_COMPILE_ITEMS = "compile-items";
     private static final String COMMAND_ERASE_COMPILED_ITEMS = "erase-compiled-items";
 
-    public static void main(String[] argv) throws IOException, ConfigurationException {
-
-        AnnotationConfigApplicationContext applicationContext = new AnnotationConfigApplicationContext(
-                new Class[] { BasicConfiguration.class });
-
-        XOAICacheService cacheService = applicationContext.getBean(XOAICacheService.class);
-        XOAIItemCacheService itemCacheService = applicationContext.getBean(XOAIItemCacheService.class);
-
-        Context ctx = null;
-
-        try {
-            CommandLineParser parser = new DefaultParser();
-            Options options = new Options();
-            options.addOption("c", "clear", false, "Clear index before indexing");
-            options.addOption("v", "verbose", false, "Verbose output");
-            options.addOption("h", "help", false, "Shows some help");
-            options.addOption("n", "number", true, "FOR DEVELOPMENT MUST DELETE");
-            CommandLine line = parser.parse(options, argv);
-
-            String[] validSolrCommands = { COMMAND_IMPORT, COMMAND_CLEAN_CACHE };
-            String[] validDatabaseCommands = { COMMAND_CLEAN_CACHE, COMMAND_COMPILE_ITEMS,
-                COMMAND_ERASE_COMPILED_ITEMS };
-
-            boolean solr = true; // Assuming solr by default
-            solr = !("database").equals(configurationService.getProperty("oai.storage", "solr"));
-
-            boolean run = false;
-            if (line.getArgs().length > 0) {
-                if (solr) {
-                    if (Arrays.asList(validSolrCommands).contains(line.getArgs()[0])) {
-                        run = true;
-                    }
-                } else {
-                    if (Arrays.asList(validDatabaseCommands).contains(line.getArgs()[0])) {
-                        run = true;
-                    }
-                }
-            }
-
-            if (!line.hasOption('h') && run) {
-                System.out.println("OAI 2.0 manager action started");
-                long start = Instant.now().toEpochMilli();
-
-                String command = line.getArgs()[0];
-
-                if (COMMAND_IMPORT.equals(command)) {
-                    ctx = new Context(Context.Mode.READ_ONLY);
-                    XOAI indexer = new XOAI(ctx, line.hasOption('c'), line.hasOption('v'));
-
-                    applicationContext.getAutowireCapableBeanFactory().autowireBean(indexer);
-
-                    int imported = indexer.index();
-                    if (imported > 0) {
-                        cleanCache(itemCacheService, cacheService);
-                    }
-                } else if (COMMAND_CLEAN_CACHE.equals(command)) {
-                    cleanCache(itemCacheService, cacheService);
-                } else if (COMMAND_COMPILE_ITEMS.equals(command)) {
-
-                    ctx = new Context();
-                    XOAI indexer = new XOAI(ctx, line.hasOption('v'));
-                    applicationContext.getAutowireCapableBeanFactory().autowireBean(indexer);
-
-                    indexer.compile();
-
-                    cleanCache(itemCacheService, cacheService);
-                } else if (COMMAND_ERASE_COMPILED_ITEMS.equals(command)) {
-                    cleanCompiledItems(itemCacheService);
-                    cleanCache(itemCacheService, cacheService);
-                }
-
-                System.out.println("OAI 2.0 manager action ended. It took "
-                        + ((Instant.now().toEpochMilli() - start) / 1000) + " seconds.");
-            } else {
-                usage();
-            }
-        } catch (Throwable ex) {
-            if (!searchForReason(ex)) {
-                ex.printStackTrace();
-            }
-            log.error(ex.getMessage(), ex);
-        } finally {
-            // Abort our context, if still open
-            if (ctx != null && ctx.isValid()) {
-                ctx.abort();
-            }
-        }
-    }
-
-    private static void cleanCompiledItems(XOAIItemCacheService itemCacheService) throws IOException {
-        System.out.println("Purging compiled items");
+    private void cleanCompiledItems(XOAIItemCacheService itemCacheService) throws IOException {
+        println("Purging compiled items");
         itemCacheService.deleteAll();
     }
 
@@ -685,17 +629,17 @@ public class XOAI {
             Instant last = xoaiLastCompilationCacheService.get();
 
             if (last == null) {
-                System.out.println("Retrieving all items to be compiled");
+                println("Retrieving all items to be compiled");
                 iterator = itemService.findAll(context);
             } else {
-                System.out.println("Retrieving items modified after " + last + " to be compiled");
+                println("Retrieving items modified after " + last + " to be compiled");
                 iterator = itemService.findByLastModifiedSince(context, last);
             }
 
             while (iterator.hasNext()) {
                 Item item = iterator.next();
                 if (verbose) {
-                    System.out.println("Compiling item with handle: " + item.getHandle());
+                    println("Compiling item with handle: " + item.getHandle());
                 }
                 xoaiItemCacheService.put(item, retrieveMetadata(context, item));
             }
@@ -704,7 +648,7 @@ public class XOAI {
         } catch (SQLException | IOException e) {
             throw new CompilingException(e);
         }
-        System.out.println("Items compiled");
+        println("Items compiled");
     }
 
     private static void usage() {
@@ -732,6 +676,131 @@ public class XOAI {
             System.out.println("     -v Verbose output");
             System.out.println("     -h Shows this text");
         }
+    }
+
+    @Override
+    public OAIScriptConfiguration getScriptConfiguration() {
+        return new DSpace().getServiceManager()
+                .getServiceByName("oai", OAIScriptConfiguration.class);
+    }
+
+    @Override
+    public void setup() throws ParseException {
+        this.clean = commandLine.hasOption('c');
+        this.verbose = commandLine.hasOption('v');
+
+        this.command = commandLine.getOptionValue('a');
+
+        if (StringUtils.isBlank(this.command)) {
+            this.command = getCommandFromArguments(commandLine.getArgs());
+        }
+
+        if (StringUtils.isBlank(this.command)) {
+            throw new ParseException("No OAI action specified");
+        }
+
+        if (!isValidCommand(this.command)) {
+            throw new ParseException("Invalid OAI action: " + this.command);
+        }
+    }
+
+    @Override
+    public void internalRun() throws Exception {
+        println("OAI 2.0 manager action started");
+        long start = Instant.now().toEpochMilli();
+
+        AnnotationConfigApplicationContext applicationContext = new AnnotationConfigApplicationContext(
+                new Class[] { BasicConfiguration.class });
+
+        XOAICacheService cacheService = applicationContext.getBean(XOAICacheService.class);
+        XOAIItemCacheService itemCacheService = applicationContext.getBean(XOAIItemCacheService.class);
+
+        try {
+            if (COMMAND_IMPORT.equals(command)) {
+                context = new Context(Context.Mode.READ_ONLY);
+
+                XOAI indexer = new XOAI(context, clean, verbose);
+                indexer.handler = this.handler;
+                applicationContext.getAutowireCapableBeanFactory().autowireBean(indexer);
+
+                int imported = indexer.index();
+                if (imported > 0) {
+                    cleanCache(itemCacheService, cacheService);
+                }
+
+            } else if (COMMAND_CLEAN_CACHE.equals(command)) {
+                cleanCache(itemCacheService, cacheService);
+
+            } else if (COMMAND_COMPILE_ITEMS.equals(command)) {
+                context = new Context();
+
+                XOAI indexer = new XOAI(context, verbose);
+                indexer.handler = this.handler;
+                applicationContext.getAutowireCapableBeanFactory().autowireBean(indexer);
+
+                indexer.compile();
+                cleanCache(itemCacheService, cacheService);
+
+            } else if (COMMAND_ERASE_COMPILED_ITEMS.equals(command)) {
+                cleanCompiledItems(itemCacheService);
+                cleanCache(itemCacheService, cacheService);
+            }
+
+            println("OAI 2.0 manager action ended. It took "
+                    + ((Instant.now().toEpochMilli() - start) / 1000) + " seconds.");
+
+        } catch (Throwable ex) {
+            if (!searchForReason(ex)) {
+                printError(ex.getMessage());
+            }
+            log.error(ex.getMessage(), ex);
+            throw ex;
+
+        } finally {
+            if (context != null && context.isValid()) {
+                context.abort();
+            }
+
+            applicationContext.close();
+        }
+    }
+    
+    static String getCommandFromArguments(String[] args) {
+        if (args == null || args.length == 0) {
+            return null;
+        }
+
+        if (COMMAND_IMPORT.equals(args[0]) ||
+                COMMAND_CLEAN_CACHE.equals(args[0]) ||
+                COMMAND_COMPILE_ITEMS.equals(args[0]) ||
+                COMMAND_ERASE_COMPILED_ITEMS.equals(args[0])) {
+            return args[0];
+        }
+
+        if ("oai".equals(args[0]) && args.length > 1) {
+            return args[1];
+        }
+
+        return args[0];
+    }
+
+    private boolean isValidCommand(String command) {
+        boolean solr = !"database".equals(configurationService.getProperty("oai.storage", "solr"));
+
+        if (solr) {
+            return Arrays.asList(COMMAND_IMPORT, COMMAND_CLEAN_CACHE).contains(command);
+        }
+
+        return Arrays.asList(
+                COMMAND_CLEAN_CACHE,
+                COMMAND_COMPILE_ITEMS,
+                COMMAND_ERASE_COMPILED_ITEMS
+        ).contains(command);
+    }
+    
+    @Override
+    public void printHelp() {
+        usage();
     }
 
 }

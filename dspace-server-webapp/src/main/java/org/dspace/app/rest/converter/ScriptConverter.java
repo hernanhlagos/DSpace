@@ -17,6 +17,7 @@ import org.dspace.app.rest.model.ParameterRest;
 import org.dspace.app.rest.model.ScriptRest;
 import org.dspace.app.rest.projection.Projection;
 import org.dspace.scripts.configuration.ScriptConfiguration;
+import org.dspace.xoai.app.OAIScriptConfiguration;
 import org.springframework.stereotype.Component;
 
 /**
@@ -42,6 +43,7 @@ public class ScriptConverter implements DSpaceConverter<ScriptConfiguration, Scr
             parameterRest.setNameLong(option.getLongOpt() != null ? "--" + option.getLongOpt() : null);
             parameterRest.setType(getType(option));
             parameterRest.setMandatory(option.isRequired());
+            parameterRest.setAllowedValues(scriptConfiguration.getAllowedValues(option));
             parameterRestList.add(parameterRest);
         }
         scriptRest.setParameterRestList(parameterRestList);

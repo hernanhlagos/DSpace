@@ -127,5 +127,10 @@
         <property name="description" value="Script that checks and updated virtual stale metadata on all items"/>
         <property name="dspaceRunnableClass" value="org.dspace.content.enhancer.script.ItemEnhancerScript"/>
     </bean>
+    
+    <bean id="oai" class="org.dspace.xoai.app.OAIScriptConfiguration">
+        <property name="description" value="OAI Manager Script"/>
+        <property name="dspaceRunnableClass" value="org.dspace.xoai.app.XOAI"/>
+    </bean>
 
 </beans>
